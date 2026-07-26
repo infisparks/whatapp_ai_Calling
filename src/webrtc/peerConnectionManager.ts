@@ -12,6 +12,7 @@ interface ActivePeerConnection {
   ssrc: number;
   speechTimeout: NodeJS.Timeout | null;
   isProcessingSpeech: boolean;
+  cancelTtsStream: boolean;
 }
 
 /**
@@ -46,6 +47,7 @@ export class PeerConnectionManager {
       ssrc: Math.floor(Math.random() * 0xffffffff),
       speechTimeout: null,
       isProcessingSpeech: false,
+      cancelTtsStream: false,
     };
 
     this.connections.set(callId, activeConn);
@@ -58,7 +60,7 @@ export class PeerConnectionManager {
       let incomingAudioChunks: Buffer[] = [];
 
       const dispatchSpeechProcessing = () => {
-        if (incomingAudioChunks.length < 50 || activeConn.isProcessingSpeech) {
+        if (incomingAudioChunks.length < 40 || activeConn.isProcessingSpeech) {
           return;
         }
 
@@ -74,6 +76,9 @@ export class PeerConnectionManager {
 
       track.onReceiveRtp.subscribe((rtp: RtpPacket) => {
         if (rtp.payload && rtp.payload.length > 0) {
+          // Interrupt active TTS audio playback if caller starts speaking
+          activeConn.cancelTtsStream = true;
+
           const pcmChunk = AudioProcessor.decodeOpusPacketToPcm(Buffer.from(rtp.payload));
           if (pcmChunk && pcmChunk.length > 0) {
             incomingAudioChunks.push(pcmChunk);
@@ -85,13 +90,13 @@ export class PeerConnectionManager {
           clearTimeout(activeConn.speechTimeout);
         }
 
-        // If caller pauses speaking for 800ms, process the spoken sentence
+        // If caller pauses speaking for 600ms, process the spoken sentence
         activeConn.speechTimeout = setTimeout(() => {
           dispatchSpeechProcessing();
-        }, 800);
+        }, 600);
 
-        // Or process immediately if buffer reaches 250 packets (~4 seconds)
-        if (incomingAudioChunks.length >= 250) {
+        // Or process immediately if buffer reaches 200 packets (~3 seconds)
+        if (incomingAudioChunks.length >= 200) {
           if (activeConn.speechTimeout) clearTimeout(activeConn.speechTimeout);
           dispatchSpeechProcessing();
         }
@@ -121,7 +126,7 @@ export class PeerConnectionManager {
   }
 
   /**
-   * Stream TTS audio buffer to caller over WebRTC PeerConnection
+   * Stream TTS audio buffer to caller over WebRTC PeerConnection with instant interruption support
    */
   public async sendTtsAudioToCall(callId: string, wavBuffer: Buffer): Promise<boolean> {
     const conn = this.connections.get(callId);
@@ -140,7 +145,15 @@ export class PeerConnectionManager {
         return false;
       }
 
+      conn.cancelTtsStream = false;
+
       for (let i = 0; i < opusFrames.length; i++) {
+        // If caller spoke while Maya was talking, stop playback instantly (barge-in)
+        if (conn.cancelTtsStream) {
+          logger.info(`[PeerConnectionManager] 🛑 Caller interrupted Maya. Stopping active audio playback for call ${callId}`);
+          break;
+        }
+
         const frame = opusFrames[i];
 
         conn.sequenceNumber = (conn.sequenceNumber + 1) & 0xffff;
@@ -165,7 +178,9 @@ export class PeerConnectionManager {
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
 
-      logger.info(`[PeerConnectionManager] ✅ Successfully transmitted ${opusFrames.length} OPUS RTP packets to call ${callId}`);
+      if (!conn.cancelTtsStream) {
+        logger.info(`[PeerConnectionManager] ✅ Transmitted ${opusFrames.length} OPUS RTP packets to call ${callId}`);
+      }
       return true;
     } catch (error) {
       logger.error(`[PeerConnectionManager] Exception streaming OPUS audio to call ${callId}:`, { error });

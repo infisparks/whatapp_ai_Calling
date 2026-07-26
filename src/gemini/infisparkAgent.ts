@@ -17,8 +17,9 @@ CRITICAL CONVERSATIONAL RULES:
 2. The caller is on a LIVE phone call. Respond directly to their specific question in 1 to 2 SHORT, complete sentences.
 3. NEVER repeat "Namaste! We are Infispark" or repeat introductory greetings once the call has started.
 4. If the caller asks what Infispark does or what your job is ("tum kya kaam karte ho / what do you do"), answer directly: "Infispark builds custom AI voice agents, web and mobile apps, and cloud software. Would you like to schedule a free consultation with our tech team?"
-5. If the caller speaks Hindi/Hinglish, reply in clear, friendly Hinglish (e.g., "Infispark ek tech company hai jo custom AI voice call agents, website, aur mobile apps banati hai. Kya aap hamare team se meeting schedule karna chahenge?").
-6. Always complete your sentence cleanly.`;
+5. If the caller says "stop" or wants to talk, say: "Sure, go ahead! I am listening."
+6. If the caller speaks Hindi/Hinglish, reply in clear, friendly Hinglish (e.g., "Infispark ek tech company hai jo custom AI voice call agents, website, aur mobile apps banati hai. Aap batayein hum aapki kya madad kar sakte hain?").
+7. Always complete your sentence cleanly.`;
 
   private conversationHistories: Map<string, ChatMessage[]> = new Map();
 
@@ -45,69 +46,89 @@ CRITICAL CONVERSATIONAL RULES:
     history.push({ role: 'user', content: userText });
 
     if (!env.GEMINI_API_KEY || env.GEMINI_API_KEY.includes('dummy')) {
-      logger.warn('[InfisparkAgent] Gemini API key not set or dummy. Using fallback representative response.');
-      const fallbackReply = 'Infispark specializes in custom AI voice agents, web applications, and software development. Would you like to schedule a consultation with our technical team?';
-      history.push({ role: 'model', content: fallbackReply });
-      return fallbackReply;
+      logger.warn('[InfisparkAgent] Gemini API key not set or dummy.');
+      return this.generateSmartFallback(userText);
     }
 
-    try {
-      const userModelTurns = history.filter((m) => m.role === 'user' || m.role === 'model');
-      const dialogueHistoryText = userModelTurns
-        .slice(-6)
-        .map((m) => `${m.role === 'user' ? 'Caller' : 'Maya'}: ${m.content}`)
-        .join('\n');
+    const modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-flash'];
 
-      const contentsPayload = [
-        {
-          role: 'user',
-          parts: [
-            {
-              text: `${this.systemPrompt}\n\nRecent Conversation History:\n${dialogueHistoryText}\n\nLatest Caller Question: "${userText}"\n\nMaya (Direct short answer in 1-2 complete sentences without repeating intro):`,
-            },
-          ],
-        },
-      ];
+    const userModelTurns = history.filter((m) => m.role === 'user' || m.role === 'model');
+    const dialogueHistoryText = userModelTurns
+      .slice(-6)
+      .map((m) => `${m.role === 'user' ? 'Caller' : 'Maya'}: ${m.content}`)
+      .join('\n');
 
-      // Call Gemini 2.5 Flash API endpoint
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_API_KEY}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: contentsPayload,
-            generationConfig: {
-              temperature: 0.7,
-              maxOutputTokens: 250,
-              thinkingConfig: {
-                thinkingBudget: 0,
+    const contentsPayload = [
+      {
+        role: 'user',
+        parts: [
+          {
+            text: `${this.systemPrompt}\n\nRecent Conversation History:\n${dialogueHistoryText}\n\nLatest Caller Question: "${userText}"\n\nMaya (Direct short answer in 1-2 complete sentences):`,
+          },
+        ],
+      },
+    ];
+
+    for (const modelName of modelsToTry) {
+      try {
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${env.GEMINI_API_KEY}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: contentsPayload,
+              generationConfig: {
+                temperature: 0.7,
+                maxOutputTokens: 200,
               },
-            },
-          }),
+            }),
+          }
+        );
+
+        const data = (await response.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>; error?: any };
+
+        const firstCandidate = data.candidates?.[0];
+        const textResponse = firstCandidate?.content?.parts?.[0]?.text;
+
+        if (response.ok && textResponse) {
+          const aiReply = textResponse.trim();
+          logger.info(`[InfisparkAgent] Gemini (${modelName}) response for ${callId}: "${aiReply}"`);
+          history.push({ role: 'model', content: aiReply });
+          return aiReply;
+        } else {
+          logger.warn(`[InfisparkAgent] Model ${modelName} returned error:`, data.error?.message || data);
         }
-      );
-
-      const data = (await response.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-
-      const firstCandidate = data.candidates?.[0];
-      const textResponse = firstCandidate?.content?.parts?.[0]?.text;
-
-      if (response.ok && textResponse) {
-        const aiReply = textResponse.trim();
-        logger.info(`[InfisparkAgent] Gemini response for ${callId}: "${aiReply}"`);
-        history.push({ role: 'model', content: aiReply });
-        return aiReply;
-      } else {
-        logger.error('[InfisparkAgent] Gemini API error response:', data);
-        const defaultReply = 'Infispark builds custom AI voice call agents, web applications, and cloud software. Would you like to schedule a consultation with our team?';
-        history.push({ role: 'model', content: defaultReply });
-        return defaultReply;
+      } catch (err) {
+        logger.error(`[InfisparkAgent] Exception calling ${modelName}:`, { err });
       }
-    } catch (error) {
-      logger.error(`[InfisparkAgent] Exception generating response for ${callId}:`, { error });
-      return 'Infispark builds custom AI and software solutions. Would you like us to arrange a callback from our technical team?';
     }
+
+    // Smart fallback if all API models fail / 429 rate limited
+    const smartFallback = this.generateSmartFallback(userText);
+    history.push({ role: 'model', content: smartFallback });
+    return smartFallback;
+  }
+
+  /**
+   * Context-aware fallback response generator when API rate limits hit
+   */
+  private generateSmartFallback(userText: string): string {
+    const lower = userText.toLowerCase();
+
+    if (lower.includes('stop') || lower.includes('chup') || lower.includes('listen') || lower.includes('hear')) {
+      return 'I am sorry! I am listening now. Please tell me how I can help you.';
+    }
+
+    if (lower.includes('do') || lower.includes('work') || lower.includes('job') || lower.includes('kaam')) {
+      return 'Infispark develops custom AI voice agents, web applications, and cloud software for businesses. How can our team assist you?';
+    }
+
+    if (lower.includes('price') || lower.includes('cost') || lower.includes('rate')) {
+      return 'We offer custom packages based on your project requirements. Would you like to schedule a consultation with our technical team?';
+    }
+
+    return 'I hear you. Infispark specializes in custom AI and web development. How can we help your business today?';
   }
 
   /**
