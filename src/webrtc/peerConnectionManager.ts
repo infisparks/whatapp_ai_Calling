@@ -13,6 +13,8 @@ interface ActivePeerConnection {
   speechTimeout: NodeJS.Timeout | null;
   isProcessingSpeech: boolean;
   cancelTtsStream: boolean;
+  isStreamingTts: boolean;
+  loudSpeechCountDuringTts: number;
 }
 
 /**
@@ -48,6 +50,8 @@ export class PeerConnectionManager {
       speechTimeout: null,
       isProcessingSpeech: false,
       cancelTtsStream: false,
+      isStreamingTts: false,
+      loudSpeechCountDuringTts: 0,
     };
 
     this.connections.set(callId, activeConn);
@@ -60,7 +64,7 @@ export class PeerConnectionManager {
       let incomingAudioChunks: Buffer[] = [];
 
       const dispatchSpeechProcessing = () => {
-        if (incomingAudioChunks.length < 40 || activeConn.isProcessingSpeech) {
+        if (incomingAudioChunks.length < 30 || activeConn.isProcessingSpeech) {
           return;
         }
 
@@ -83,9 +87,12 @@ export class PeerConnectionManager {
             // Ignore background silence/room noise (only buffer real speech energy RMS > 500)
             if (volume > 500) {
               incomingAudioChunks.push(pcmChunk);
+            }
 
-              // Only interrupt Maya if caller speaks with strong voice energy (RMS > 2000)
-              if (volume > 2000 && incomingAudioChunks.length >= 10) {
+            // Only trigger interruption if Maya is CURRENTLY streaming audio AND caller speaks loudly (RMS > 2500)
+            if (activeConn.isStreamingTts && volume > 2500) {
+              activeConn.loudSpeechCountDuringTts++;
+              if (activeConn.loudSpeechCountDuringTts >= 8) {
                 activeConn.cancelTtsStream = true;
               }
             }
@@ -142,6 +149,10 @@ export class PeerConnectionManager {
       return false;
     }
 
+    conn.isStreamingTts = true;
+    conn.cancelTtsStream = false;
+    conn.loudSpeechCountDuringTts = 0;
+
     try {
       const opusFrames = AudioProcessor.encodeWavToOpusFrames(wavBuffer);
       logger.info(`[PeerConnectionManager] Streaming ${opusFrames.length} OPUS frames over WebRTC to call ${callId}`);
@@ -151,8 +162,6 @@ export class PeerConnectionManager {
         logger.warn(`[PeerConnectionManager] Audio transceiver sender not available for call ${callId}`);
         return false;
       }
-
-      conn.cancelTtsStream = false;
 
       for (let i = 0; i < opusFrames.length; i++) {
         // If caller spoke while Maya was talking, stop playback instantly (barge-in)
@@ -192,6 +201,8 @@ export class PeerConnectionManager {
     } catch (error) {
       logger.error(`[PeerConnectionManager] Exception streaming OPUS audio to call ${callId}:`, { error });
       return false;
+    } finally {
+      conn.isStreamingTts = false;
     }
   }
 
