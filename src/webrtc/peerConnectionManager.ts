@@ -133,6 +133,9 @@ export class PeerConnectionManager {
         const rtpPacket = new RtpPacket(header, payload);
 
         transceiver.sender.sendRtp(rtpPacket);
+
+        // Pacing delay (20ms per WebRTC audio frame for real-time playback)
+        await new Promise((resolve) => setTimeout(resolve, 20));
       }
 
       logger.info(`[PeerConnectionManager] ✅ Successfully transmitted RTP audio stream to call ${callId}`);
