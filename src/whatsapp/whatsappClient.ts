@@ -22,7 +22,7 @@ export class WhatsAppClient {
       call_id: callId,
       action: 'accept',
       session: {
-        type: 'answer',
+        sdp_type: 'answer',
         sdp: sdpAnswer,
       },
     };
@@ -70,7 +70,7 @@ export class WhatsAppClient {
           messaging_product: 'whatsapp',
           action: 'accept',
           session: {
-            type: 'answer',
+            sdp_type: 'answer',
             sdp: sdpAnswer,
           },
         }),

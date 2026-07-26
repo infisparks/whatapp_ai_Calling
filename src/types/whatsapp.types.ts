@@ -54,6 +54,7 @@ export interface WhatsAppCallChangeValue {
     session?: {
       sdp?: string;
       type?: 'offer' | 'answer';
+      sdp_type?: 'offer' | 'answer';
     };
     audio?: {
       codec?: string;
