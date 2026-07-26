@@ -109,6 +109,9 @@ export interface ParsedSdpInfo {
   mediaTypes: string[];
   audioCodecs: string[];
   iceCandidates: string[];
+  iceUfrag?: string;
+  icePwd?: string;
+  mid?: string;
   fingerprint?: string;
   rawSdp: string;
 }
