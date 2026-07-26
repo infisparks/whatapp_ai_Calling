@@ -10,19 +10,15 @@ export interface ChatMessage {
  * Infispark AI Customer Representative Agent (Powered by Gemini API)
  */
 export class InfisparkAgent {
-  private systemPrompt = `You are Maya, an intelligent AI Customer Representative and Team Member at Infispark (Domain: infispark.in).
+  private systemPrompt = `You are Maya, an intelligent AI Voice Representative for Infispark (infispark.in).
 
-Your Goals:
-1. Greet callers warmly on behalf of Infispark.
-2. Provide concise, professional, and friendly information about Infispark's services:
-   - AI Solutions & Custom Voice Agents
-   - Web & Mobile App Development
-   - Cloud & DevOps Infrastructure
-   - Enterprise Software Solutions & IT Consulting
-3. Help callers schedule a consultation or meeting with the Infispark tech team.
-4. Keep your replies concise (1 to 3 short sentences maximum) because your responses will be spoken aloud to the caller over a voice phone call.
-5. Speak in a natural, polite tone. Support English and Hindi seamlessly based on the language the customer speaks.
-6. Never make up fake promises or guarantees. If asked about custom pricing or specialized projects, offer to schedule a call with an Infispark team member.`;
+CRITICAL CONVERSATIONAL RULES:
+1. Infispark specializes in: Custom AI Voice Agents, Web & Mobile App Development, Cloud & DevOps, and Enterprise Software Solutions.
+2. The caller is on a LIVE phone call. Respond directly to their specific question in 1 to 2 SHORT, complete sentences.
+3. NEVER repeat "Namaste! We are Infispark" or repeat introductory greetings once the call has started.
+4. If the caller asks what Infispark does or what your job is ("tum kya kaam karte ho / what do you do"), answer directly: "Infispark builds custom AI voice agents, web and mobile apps, and cloud software. Would you like to schedule a free consultation with our tech team?"
+5. If the caller speaks Hindi/Hinglish, reply in clear, friendly Hinglish (e.g., "Infispark ek tech company hai jo custom AI voice call agents, website, aur mobile apps banati hai. Kya aap hamare team se meeting schedule karna chahenge?").
+6. Always complete your sentence cleanly.`;
 
   private conversationHistories: Map<string, ChatMessage[]> = new Map();
 
@@ -50,7 +46,7 @@ Your Goals:
 
     if (!env.GEMINI_API_KEY || env.GEMINI_API_KEY.includes('dummy')) {
       logger.warn('[InfisparkAgent] Gemini API key not set or dummy. Using fallback representative response.');
-      const fallbackReply = 'Thank you for reaching out to Infispark! We specialize in custom AI agents, web applications, and software development. Would you like to schedule a consultation with our technical team?';
+      const fallbackReply = 'Infispark specializes in custom AI voice agents, web applications, and software development. Would you like to schedule a consultation with our technical team?';
       history.push({ role: 'model', content: fallbackReply });
       return fallbackReply;
     }
@@ -67,7 +63,7 @@ Your Goals:
           role: 'user',
           parts: [
             {
-              text: `${this.systemPrompt}\n\nRecent Conversation History:\n${dialogueHistoryText}\n\nLatest Caller Speech: ${userText}\n\nMaya (respond in 1-2 short sentences):`,
+              text: `${this.systemPrompt}\n\nRecent Conversation History:\n${dialogueHistoryText}\n\nLatest Caller Question: "${userText}"\n\nMaya (Direct short answer in 1-2 complete sentences without repeating intro):`,
             },
           ],
         },
@@ -83,7 +79,10 @@ Your Goals:
             contents: contentsPayload,
             generationConfig: {
               temperature: 0.7,
-              maxOutputTokens: 300,
+              maxOutputTokens: 250,
+              thinkingConfig: {
+                thinkingBudget: 0,
+              },
             },
           }),
         }
@@ -101,13 +100,13 @@ Your Goals:
         return aiReply;
       } else {
         logger.error('[InfisparkAgent] Gemini API error response:', data);
-        const defaultReply = 'Infispark offers end-to-end AI and web development solutions. How can our team help your business today?';
+        const defaultReply = 'Infispark builds custom AI voice call agents, web applications, and cloud software. Would you like to schedule a consultation with our team?';
         history.push({ role: 'model', content: defaultReply });
         return defaultReply;
       }
     } catch (error) {
       logger.error(`[InfisparkAgent] Exception generating response for ${callId}:`, { error });
-      return 'Thank you for calling Infispark. We offer custom AI and software solutions. Would you like us to arrange a callback from our team?';
+      return 'Infispark builds custom AI and software solutions. Would you like us to arrange a callback from our technical team?';
     }
   }
 
