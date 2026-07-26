@@ -2,10 +2,11 @@ import OpusScript from 'opusscript';
 import { logger } from '../utils/logger';
 
 /**
- * Audio Processor using OpusScript to encode PCM WAV audio into OPUS RTP packets
+ * Audio Processor using OpusScript to encode and decode OPUS / PCM WebRTC RTP audio
  */
 export class AudioProcessor {
   private static encoder = new OpusScript(48000, 1, OpusScript.Application.VOIP);
+  private static decoder = new OpusScript(16000, 1, OpusScript.Application.VOIP);
 
   /**
    * Convert Sarvam TTS WAV/PCM Buffer into an array of encoded OPUS frames (20ms per frame)
@@ -42,6 +43,18 @@ export class AudioProcessor {
     } catch (error) {
       logger.error('[AudioProcessor] Error encoding PCM to OPUS:', { error });
       return [];
+    }
+  }
+
+  /**
+   * Decode incoming OPUS RTP payload packet into raw linear 16kHz PCM audio buffer
+   */
+  public static decodeOpusPacketToPcm(opusPayload: Buffer): Buffer | null {
+    try {
+      const decodedPcm = AudioProcessor.decoder.decode(opusPayload);
+      return Buffer.from(decodedPcm);
+    } catch (error) {
+      return null;
     }
   }
 }

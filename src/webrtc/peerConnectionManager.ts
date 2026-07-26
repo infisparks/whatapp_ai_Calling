@@ -74,7 +74,10 @@ export class PeerConnectionManager {
 
       track.onReceiveRtp.subscribe((rtp: RtpPacket) => {
         if (rtp.payload && rtp.payload.length > 0) {
-          incomingAudioChunks.push(Buffer.from(rtp.payload));
+          const pcmChunk = AudioProcessor.decodeOpusPacketToPcm(Buffer.from(rtp.payload));
+          if (pcmChunk && pcmChunk.length > 0) {
+            incomingAudioChunks.push(pcmChunk);
+          }
         }
 
         // Reset silence timer on every new audio packet

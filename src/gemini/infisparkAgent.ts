@@ -56,6 +56,23 @@ Your Goals:
     }
 
     try {
+      const userModelTurns = history.filter((m) => m.role === 'user' || m.role === 'model');
+      const dialogueHistoryText = userModelTurns
+        .slice(-6)
+        .map((m) => `${m.role === 'user' ? 'Caller' : 'Maya'}: ${m.content}`)
+        .join('\n');
+
+      const contentsPayload = [
+        {
+          role: 'user',
+          parts: [
+            {
+              text: `${this.systemPrompt}\n\nRecent Conversation History:\n${dialogueHistoryText}\n\nLatest Caller Speech: ${userText}\n\nMaya (respond in 1-2 short sentences):`,
+            },
+          ],
+        },
+      ];
+
       // Call Gemini 2.5 Flash API endpoint
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_API_KEY}`,
@@ -63,12 +80,7 @@ Your Goals:
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            contents: [
-              {
-                role: 'user',
-                parts: [{ text: `${this.systemPrompt}\n\nUser Question: ${userText}` }],
-              },
-            ],
+            contents: contentsPayload,
             generationConfig: {
               temperature: 0.7,
               maxOutputTokens: 300,
