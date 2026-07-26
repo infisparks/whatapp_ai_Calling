@@ -76,12 +76,14 @@ export class PeerConnectionManager {
 
       track.onReceiveRtp.subscribe((rtp: RtpPacket) => {
         if (rtp.payload && rtp.payload.length > 0) {
-          // Interrupt active TTS audio playback if caller starts speaking
-          activeConn.cancelTtsStream = true;
-
           const pcmChunk = AudioProcessor.decodeOpusPacketToPcm(Buffer.from(rtp.payload));
           if (pcmChunk && pcmChunk.length > 0) {
             incomingAudioChunks.push(pcmChunk);
+          }
+
+          // Only interrupt Maya if caller has actually spoken real voice (>15 speech packets)
+          if (incomingAudioChunks.length >= 15) {
+            activeConn.cancelTtsStream = true;
           }
         }
 
