@@ -3,6 +3,7 @@ import { logger } from '../utils/logger';
 import { sarvamSttService } from '../sarvam/sttService';
 import { infisparkAgent } from '../gemini/infisparkAgent';
 import { sarvamTtsService } from '../sarvam/ttsService';
+import { AudioProcessor } from '../audio/audioProcessor';
 
 interface ActivePeerConnection {
   pc: RTCPeerConnection;
@@ -94,7 +95,7 @@ export class PeerConnectionManager {
   /**
    * Stream TTS audio buffer to caller over WebRTC PeerConnection
    */
-  public async sendTtsAudioToCall(callId: string, pcmOrOpusBuffer: Buffer): Promise<boolean> {
+  public async sendTtsAudioToCall(callId: string, wavBuffer: Buffer): Promise<boolean> {
     const conn = this.connections.get(callId);
     if (!conn) {
       logger.warn(`[PeerConnectionManager] Active connection not found for call ${callId}`);
@@ -102,7 +103,8 @@ export class PeerConnectionManager {
     }
 
     try {
-      logger.info(`[PeerConnectionManager] Streaming ${pcmOrOpusBuffer.length} bytes of audio over WebRTC to call ${callId}`);
+      const opusFrames = AudioProcessor.encodeWavToOpusFrames(wavBuffer);
+      logger.info(`[PeerConnectionManager] Streaming ${opusFrames.length} OPUS frames over WebRTC to call ${callId}`);
       
       const transceiver = conn.pc.getTransceivers().find((t) => t.receiver.track.kind === 'audio');
       if (!transceiver || !transceiver.sender) {
@@ -110,10 +112,8 @@ export class PeerConnectionManager {
         return false;
       }
 
-      // Chunk audio into 160-byte payload packets and transmit over RTP
-      const chunkSize = 160;
-      for (let offset = 0; offset < pcmOrOpusBuffer.length; offset += chunkSize) {
-        const payload = pcmOrOpusBuffer.subarray(offset, offset + chunkSize);
+      for (let i = 0; i < opusFrames.length; i++) {
+        const frame = opusFrames[i];
 
         conn.sequenceNumber = (conn.sequenceNumber + 1) & 0xffff;
         conn.timestamp = (conn.timestamp + 960) & 0xffffffff;
@@ -122,7 +122,7 @@ export class PeerConnectionManager {
           version: 2,
           padding: false,
           extension: false,
-          marker: offset === 0,
+          marker: i === 0,
           payloadType: 111,
           sequenceNumber: conn.sequenceNumber,
           timestamp: conn.timestamp,
@@ -130,18 +130,17 @@ export class PeerConnectionManager {
           csrc: [],
         });
 
-        const rtpPacket = new RtpPacket(header, payload);
-
+        const rtpPacket = new RtpPacket(header, frame);
         transceiver.sender.sendRtp(rtpPacket);
 
         // Pacing delay (20ms per WebRTC audio frame for real-time playback)
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
 
-      logger.info(`[PeerConnectionManager] ✅ Successfully transmitted RTP audio stream to call ${callId}`);
+      logger.info(`[PeerConnectionManager] ✅ Successfully transmitted ${opusFrames.length} OPUS RTP packets to call ${callId}`);
       return true;
     } catch (error) {
-      logger.error(`[PeerConnectionManager] Exception streaming RTP audio to call ${callId}:`, { error });
+      logger.error(`[PeerConnectionManager] Exception streaming OPUS audio to call ${callId}:`, { error });
       return false;
     }
   }
