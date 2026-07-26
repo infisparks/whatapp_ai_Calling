@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { WebhookParser } from '../../whatsapp/webhookParser';
 import { callAcceptanceService } from '../../services/callAcceptanceService';
 import { callSessionManager } from '../../whatsapp/callSessionManager';
+import { whatsappClient } from '../../whatsapp/whatsappClient';
 import { WhatsAppWebhookPayload } from '../../types/whatsapp.types';
 import { logger } from '../../utils/logger';
 
@@ -66,6 +67,7 @@ export class WhatsAppController {
     res.status(200).json({
       success: true,
       count: sessions.length,
+      lastWhatsAppApiResponse: whatsappClient.lastApiResponse,
       sessions,
     });
   }
