@@ -50,13 +50,7 @@ CRITICAL CONVERSATIONAL RULES:
       return this.generateSmartFallback(userText);
     }
 
-    const modelsToTry = [
-      'gemini-2.0-flash-lite',
-      'gemini-1.5-flash-8b',
-      'gemini-2.0-flash',
-      'gemini-1.5-flash',
-      'gemini-2.5-flash',
-    ];
+    const modelsToTry = ['gemini-2.5-flash'];
 
     const userModelTurns = history.filter((m) => m.role === 'user' || m.role === 'model');
     const dialogueHistoryText = userModelTurns
