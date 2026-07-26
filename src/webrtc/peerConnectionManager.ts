@@ -69,15 +69,26 @@ export class PeerConnectionManager {
       });
     };
 
+    // Explicitly add audio transceiver with bidirectional sendrecv media direction
+    pc.addTransceiver('audio', { direction: 'sendrecv' });
+
     // Set Remote Description (WhatsApp Call Offer SDP)
     await pc.setRemoteDescription({ type: 'offer', sdp: sdpOffer });
+
+    // Force transceivers direction to sendrecv
+    pc.getTransceivers().forEach((t) => {
+      t.direction = 'sendrecv';
+    });
 
     // Create Local Description (SDP Answer)
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
+    let finalSdp = pc.localDescription?.sdp || answer.sdp;
+    finalSdp = finalSdp.replace(/a=recvonly/g, 'a=sendrecv');
+
     logger.info(`[PeerConnectionManager] WebRTC SDP Answer generated for call ${callId}`);
-    return pc.localDescription?.sdp || answer.sdp;
+    return finalSdp;
   }
 
   /**
