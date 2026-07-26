@@ -109,25 +109,25 @@ export class SdpParser {
     const pwd = parsedOffer.icePwd || 'pwd' + Math.random().toString(36).substring(2, 22);
     const fingerprint = parsedOffer.fingerprint || 'sha-256 75:68:7F:FE:8A:13:E1:E3:DA:CC:01:87:62:DD:6F:BD:E2:30:93:5A:35:05:6B:3B:DE:B3:16:9C:50:29:CE:54';
     const mid = parsedOffer.mid || 'audio';
-    const connectionIp = parsedOffer.connectionAddress || '127.0.0.1';
 
     const sdpLines = [
       'v=0',
-      `o=- ${sessionTime} 2 IN IP4 ${connectionIp}`,
+      `o=- ${sessionTime} 2 IN IP4 0.0.0.0`,
       's=-',
       't=0 0',
       'a=group:BUNDLE audio',
       `a=msid-semantic: WMS infiplus_stream`,
       'm=audio 9000 UDP/TLS/RTP/SAVPF 111',
-      `c=IN IP4 ${connectionIp}`,
+      'c=IN IP4 0.0.0.0',
       `a=mid:${mid}`,
       'a=rtpmap:111 opus/48000/2',
       'a=fmtp:111 maxaveragebitrate=20000;maxplaybackrate=16000;minptime=20;sprop-maxcapturerate=16000;useinbandfec=1',
       'a=rtcp-mux',
-      'a=setup:active',
+      'a=setup:passive',
       `a=ice-ufrag:${ufrag}`,
       `a=ice-pwd:${pwd}`,
       `a=fingerprint:${fingerprint}`,
+      'a=candidate:1 1 UDP 2122260223 0.0.0.0 9000 typ host',
       'a=sendrecv',
       `a=msid:infiplus_stream infiplus_track1`,
       ''
