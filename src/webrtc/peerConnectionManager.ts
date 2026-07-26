@@ -4,6 +4,7 @@ import { sarvamSttService } from '../sarvam/sttService';
 import { infisparkAgent } from '../gemini/infisparkAgent';
 import { sarvamTtsService } from '../sarvam/ttsService';
 import { AudioProcessor } from '../audio/audioProcessor';
+import { geminiLiveService } from '../services/gemini-live/GeminiLiveService';
 
 interface ActivePeerConnection {
   pc: RTCPeerConnection;
@@ -59,7 +60,7 @@ export class PeerConnectionManager {
     // Listen to incoming audio track from WhatsApp caller
     pc.ontrack = (event) => {
       logger.info(`[PeerConnectionManager] Received incoming WebRTC audio track from call ${callId}`);
-      
+
       const track = event.track;
       let incomingAudioChunks: Buffer[] = [];
 
@@ -72,24 +73,29 @@ export class PeerConnectionManager {
         incomingAudioChunks = [];
         activeConn.isProcessingSpeech = true;
 
-        this.processIncomingCallerAudio(callId, fullAudioBuffer)
-          .finally(() => {
-            activeConn.isProcessingSpeech = false;
-          });
+        this.processIncomingCallerAudio(callId, fullAudioBuffer).finally(() => {
+          activeConn.isProcessingSpeech = false;
+        });
       };
 
       track.onReceiveRtp.subscribe((rtp: RtpPacket) => {
         if (rtp.payload && rtp.payload.length > 0) {
           const pcmChunk = AudioProcessor.decodeOpusPacketToPcm(Buffer.from(rtp.payload));
           if (pcmChunk && pcmChunk.length > 0) {
+            // 1. Forward raw audio directly to Gemini Live Audio Bridge if active
+            const bridge = geminiLiveService.getAudioBridge(callId);
+            if (bridge) {
+              bridge.processCallerAudioChunk(pcmChunk);
+            }
+
             const volume = AudioProcessor.calculatePcmVolume(pcmChunk);
 
-            // Ignore background silence/room noise (only buffer real speech energy RMS > 500)
+            // Ignore background silence/room noise
             if (volume > 500) {
               incomingAudioChunks.push(pcmChunk);
             }
 
-            // Only trigger interruption if Maya is CURRENTLY streaming audio AND caller speaks loudly (RMS > 3500)
+            // Interrupt check for traditional TTS playback
             if (activeConn.isStreamingTts && volume > 3500) {
               activeConn.loudSpeechCountDuringTts++;
               if (activeConn.loudSpeechCountDuringTts >= 15) {
@@ -99,21 +105,17 @@ export class PeerConnectionManager {
           }
         }
 
-        // Reset silence timer on every new audio packet
+        // Fallback silence timer for batch processing
         if (activeConn.speechTimeout) {
           clearTimeout(activeConn.speechTimeout);
         }
 
-        // If caller pauses speaking for 600ms, process the spoken sentence
         activeConn.speechTimeout = setTimeout(() => {
-          dispatchSpeechProcessing();
+          const bridge = geminiLiveService.getAudioBridge(callId);
+          if (!bridge) {
+            dispatchSpeechProcessing();
+          }
         }, 600);
-
-        // Or process immediately if buffer reaches 200 packets (~3 seconds)
-        if (incomingAudioChunks.length >= 200) {
-          if (activeConn.speechTimeout) clearTimeout(activeConn.speechTimeout);
-          dispatchSpeechProcessing();
-        }
       });
     };
 
@@ -140,38 +142,29 @@ export class PeerConnectionManager {
   }
 
   /**
-   * Stream TTS audio buffer to caller over WebRTC PeerConnection with instant interruption support
+   * Stream array of encoded OPUS frames directly to call over WebRTC with real-time pacing & barge-in support
    */
-  public async sendTtsAudioToCall(callId: string, wavBuffer: Buffer): Promise<boolean> {
+  public async streamOpusFramesToCall(
+    callId: string,
+    opusFrames: Buffer[],
+    isInterruptedFn?: () => boolean
+  ): Promise<boolean> {
     const conn = this.connections.get(callId);
-    if (!conn) {
-      logger.warn(`[PeerConnectionManager] Active connection not found for call ${callId}`);
-      return false;
-    }
+    if (!conn) return false;
+
+    const transceiver = conn.pc.getTransceivers().find((t) => t.receiver.track.kind === 'audio');
+    if (!transceiver || !transceiver.sender) return false;
 
     conn.isStreamingTts = true;
-    conn.cancelTtsStream = false;
-    conn.loudSpeechCountDuringTts = 0;
 
     try {
-      const opusFrames = AudioProcessor.encodeWavToOpusFrames(wavBuffer);
-      logger.info(`[PeerConnectionManager] Streaming ${opusFrames.length} OPUS frames over WebRTC to call ${callId}`);
-      
-      const transceiver = conn.pc.getTransceivers().find((t) => t.receiver.track.kind === 'audio');
-      if (!transceiver || !transceiver.sender) {
-        logger.warn(`[PeerConnectionManager] Audio transceiver sender not available for call ${callId}`);
-        return false;
-      }
-
       for (let i = 0; i < opusFrames.length; i++) {
-        // If caller spoke while Maya was talking, stop playback instantly (barge-in)
-        if (conn.cancelTtsStream) {
-          logger.info(`[PeerConnectionManager] 🛑 Caller interrupted Maya. Stopping active audio playback for call ${callId}`);
+        if (conn.cancelTtsStream || (isInterruptedFn && isInterruptedFn())) {
+          logger.info(`[PeerConnectionManager] [Call ${callId}] 🛑 Output audio streaming stopped due to interruption`);
           break;
         }
 
         const frame = opusFrames[i];
-
         conn.sequenceNumber = (conn.sequenceNumber + 1) & 0xffff;
         conn.timestamp = (conn.timestamp + 960) & 0xffffffff;
 
@@ -190,16 +183,12 @@ export class PeerConnectionManager {
         const rtpPacket = new RtpPacket(header, frame);
         transceiver.sender.sendRtp(rtpPacket);
 
-        // Pacing delay (20ms per WebRTC audio frame for real-time playback)
+        // 20ms pacing delay per RTP audio frame
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
-
-      if (!conn.cancelTtsStream) {
-        logger.info(`[PeerConnectionManager] ✅ Transmitted ${opusFrames.length} OPUS RTP packets to call ${callId}`);
-      }
       return true;
-    } catch (error) {
-      logger.error(`[PeerConnectionManager] Exception streaming OPUS audio to call ${callId}:`, { error });
+    } catch (err) {
+      logger.error(`[PeerConnectionManager] Exception streaming OPUS frames to call ${callId}:`, { err });
       return false;
     } finally {
       conn.isStreamingTts = false;
@@ -207,12 +196,31 @@ export class PeerConnectionManager {
   }
 
   /**
-   * Process caller speech chunk -> Sarvam STT -> Gemini Agent -> Sarvam TTS -> Stream Audio
+   * Immediately cancel any active audio playback for call (Barge-in)
+   */
+  public stopCallPlayback(callId: string): void {
+    const conn = this.connections.get(callId);
+    if (conn) {
+      conn.cancelTtsStream = true;
+      conn.isStreamingTts = false;
+      logger.info(`[PeerConnectionManager] Cancelled active playback for call ${callId}`);
+    }
+  }
+
+  /**
+   * Stream TTS audio buffer to caller over WebRTC PeerConnection
+   */
+  public async sendTtsAudioToCall(callId: string, wavBuffer: Buffer): Promise<boolean> {
+    const opusFrames = AudioProcessor.encodeWavToOpusFrames(wavBuffer);
+    return this.streamOpusFramesToCall(callId, opusFrames);
+  }
+
+  /**
+   * Process caller speech chunk fallback -> Sarvam STT -> Gemini Agent -> Sarvam TTS -> Stream Audio
    */
   private async processIncomingCallerAudio(callId: string, audioBuffer: Buffer): Promise<void> {
     logger.info(`[PeerConnectionManager] Transcribing caller speech buffer (${audioBuffer.length} bytes)...`);
 
-    // 1. Sarvam Speech-to-Text
     const transcript = await sarvamSttService.transcribeAudio(audioBuffer, 'en-IN');
     if (!transcript || transcript.trim().length === 0) {
       logger.debug('[PeerConnectionManager] No clear speech detected in audio chunk');
@@ -220,15 +228,11 @@ export class PeerConnectionManager {
     }
 
     logger.info(`[PeerConnectionManager] Caller said: "${transcript}"`);
-
-    // 2. Gemini Infispark AI Agent Response
     const aiResponseText = await infisparkAgent.processUserSpeech(callId, transcript);
     logger.info(`[PeerConnectionManager] Maya AI Response: "${aiResponseText}"`);
 
-    // 3. Sarvam Text-to-Speech
     const replyAudioBuffer = await sarvamTtsService.synthesizeSpeech(aiResponseText, 'en-IN');
     if (replyAudioBuffer) {
-      // 4. Stream back to caller
       await this.sendTtsAudioToCall(callId, replyAudioBuffer);
     }
   }

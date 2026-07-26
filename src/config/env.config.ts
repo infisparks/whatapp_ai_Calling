@@ -19,6 +19,7 @@ const envSchema = z.object({
 
   SARVAM_API_KEY: z.string().optional().default(''),
   GEMINI_API_KEY: z.string().optional().default(''),
+  GEMINI_MODEL: z.string().default('gemini-live-2.5-flash-preview'),
 
   SUPABASE_URL: z.string().optional().default(''),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional().default(''),

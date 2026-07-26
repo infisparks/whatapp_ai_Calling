@@ -9,7 +9,7 @@ export class AudioProcessor {
   private static decoder = new OpusScript(16000, 1, OpusScript.Application.VOIP);
 
   /**
-   * Convert Sarvam TTS WAV/PCM Buffer into an array of encoded OPUS frames (20ms per frame)
+   * Convert Sarvam TTS / Gemini PCM Buffer into an array of encoded OPUS frames (20ms per frame @ 48kHz)
    */
   public static encodeWavToOpusFrames(wavBuffer: Buffer): Buffer[] {
     try {
@@ -19,6 +19,18 @@ export class AudioProcessor {
         pcmData = wavBuffer.subarray(44);
       }
 
+      return AudioProcessor.encodePcmToOpusFrames(pcmData);
+    } catch (error) {
+      logger.error('[AudioProcessor] Error encoding WAV to OPUS:', { error });
+      return [];
+    }
+  }
+
+  /**
+   * Convert raw linear PCM buffer (48kHz or resampled 16kHz) to array of OPUS frames (20ms per frame = 960 samples @ 48kHz)
+   */
+  public static encodePcmToOpusFrames(pcmData: Buffer): Buffer[] {
+    try {
       const opusFrames: Buffer[] = [];
       // 960 samples @ 48kHz mono = 1920 bytes (20ms frame size)
       const frameSizeSamples = 960;
@@ -27,7 +39,6 @@ export class AudioProcessor {
       for (let offset = 0; offset < pcmData.length; offset += frameSizeBytes) {
         const chunk = pcmData.subarray(offset, offset + frameSizeBytes);
         if (chunk.length < frameSizeBytes) {
-          // Pad remaining frame with zeroes
           const padded = Buffer.alloc(frameSizeBytes);
           chunk.copy(padded);
           const encoded = AudioProcessor.encoder.encode(padded, frameSizeSamples);
@@ -38,10 +49,9 @@ export class AudioProcessor {
         }
       }
 
-      logger.info(`[AudioProcessor] Encoded ${wavBuffer.length} bytes PCM into ${opusFrames.length} OPUS frames`);
       return opusFrames;
     } catch (error) {
-      logger.error('[AudioProcessor] Error encoding PCM to OPUS:', { error });
+      logger.error('[AudioProcessor] Error encoding PCM to OPUS frames:', { error });
       return [];
     }
   }
@@ -56,6 +66,35 @@ export class AudioProcessor {
     } catch (error) {
       return null;
     }
+  }
+
+  /**
+   * Resample 16-bit linear PCM audio from source rate (e.g. 24000Hz) to target rate (e.g. 16000Hz or 48000Hz)
+   */
+  public static resamplePcm(pcmBuffer: Buffer, fromRate: number, toRate: number): Buffer {
+    if (fromRate === toRate || !pcmBuffer || pcmBuffer.length < 2) return pcmBuffer;
+
+    const sourceSampleCount = Math.floor(pcmBuffer.length / 2);
+    const ratio = toRate / fromRate;
+    const targetSampleCount = Math.floor(sourceSampleCount * ratio);
+    const resultBuffer = Buffer.alloc(targetSampleCount * 2);
+
+    for (let i = 0; i < targetSampleCount; i++) {
+      const sourceIndex = i / ratio;
+      const indexFloor = Math.floor(sourceIndex);
+      const indexCeil = Math.min(sourceSampleCount - 1, Math.ceil(sourceIndex));
+      const fraction = sourceIndex - indexFloor;
+
+      const sampleFloor = pcmBuffer.readInt16LE(indexFloor * 2);
+      const sampleCeil = pcmBuffer.readInt16LE(indexCeil * 2);
+
+      const interpolatedSample = Math.round(sampleFloor + fraction * (sampleCeil - sampleFloor));
+      const clampedSample = Math.max(-32768, Math.min(32767, interpolatedSample));
+
+      resultBuffer.writeInt16LE(clampedSample, i * 2);
+    }
+
+    return resultBuffer;
   }
 
   /**

@@ -1,5 +1,6 @@
-import { env } from '../config/env.config';
 import { logger } from '../utils/logger';
+import { geminiLiveService } from '../services/gemini-live/GeminiLiveService';
+import { GeminiLiveSession } from '../services/gemini-live/GeminiLiveSession';
 
 export interface ChatMessage {
   role: 'user' | 'model' | 'system';
@@ -7,7 +8,7 @@ export interface ChatMessage {
 }
 
 /**
- * Infispark AI Customer Representative Agent (Powered by Gemini API)
+ * Infispark AI Customer Representative Agent (Powered by Gemini Live API)
  */
 export class InfisparkAgent {
   private systemPrompt = `You are Maya, an intelligent AI Voice Representative for Infispark (infispark.in).
@@ -31,87 +32,57 @@ CRITICAL CONVERSATIONAL RULES:
   }
 
   /**
-   * Process user speech input and return AI text response
+   * Initialize a Gemini Live WebSocket Session for an active WhatsApp call
    */
-  public async processUserSpeech(callId: string, userText: string): Promise<string> {
-    logger.info(`[InfisparkAgent] Call ${callId} user input: "${userText}"`);
+  public async initializeLiveSession(callId: string): Promise<GeminiLiveSession> {
+    logger.info(`[InfisparkAgent] Initializing Gemini Live real-time streaming session for call ${callId}`);
 
-    // Get or initialize conversation history for this call
+    // System prompt sent ONLY ONCE when call starts
+    const session = await geminiLiveService.createSession({
+      callId,
+      systemInstruction: this.systemPrompt,
+      voiceName: 'Puck',
+    });
+
     let history = this.conversationHistories.get(callId);
     if (!history) {
       history = [{ role: 'system', content: this.systemPrompt }];
       this.conversationHistories.set(callId, history);
     }
 
-    history.push({ role: 'user', content: userText });
-
-    if (!env.GEMINI_API_KEY || env.GEMINI_API_KEY.includes('dummy')) {
-      logger.warn('[InfisparkAgent] Gemini API key not set or dummy.');
-      return this.generateSmartFallback(userText);
-    }
-
-    const modelsToTry = ['gemini-2.5-flash'];
-
-    const userModelTurns = history.filter((m) => m.role === 'user' || m.role === 'model');
-    const dialogueHistoryText = userModelTurns
-      .slice(-6)
-      .map((m) => `${m.role === 'user' ? 'Caller' : 'Maya'}: ${m.content}`)
-      .join('\n');
-
-    const contentsPayload = [
-      {
-        role: 'user',
-        parts: [
-          {
-            text: `${this.systemPrompt}\n\nRecent Conversation History:\n${dialogueHistoryText}\n\nLatest Caller Question: "${userText}"\n\nMaya (Direct short answer in 1-2 complete sentences):`,
-          },
-        ],
-      },
-    ];
-
-    for (const modelName of modelsToTry) {
-      try {
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${env.GEMINI_API_KEY}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: contentsPayload,
-              generationConfig: {
-                temperature: 0.7,
-                maxOutputTokens: 200,
-              },
-            }),
-          }
-        );
-
-        const data = (await response.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>; error?: any };
-
-        const firstCandidate = data.candidates?.[0];
-        const textResponse = firstCandidate?.content?.parts?.[0]?.text;
-
-        if (response.ok && textResponse) {
-          const aiReply = textResponse.trim();
-          logger.info(`[InfisparkAgent] Gemini (${modelName}) response for ${callId}: "${aiReply}"`);
-          history.push({ role: 'model', content: aiReply });
-          return aiReply;
-        } else {
-          logger.warn(`[InfisparkAgent] Model ${modelName} returned error:`, data.error?.message || data);
-        }
-      } catch (err) {
-        logger.error(`[InfisparkAgent] Exception calling ${modelName}:`, { err });
+    session.on('text', (textTranscript: string) => {
+      if (history) {
+        history.push({ role: 'model', content: textTranscript });
       }
-    }
+    });
 
-    // Smart fallback if all API models fail / 429 rate limited
-    const smartFallback = this.generateSmartFallback(userText);
-    history.push({ role: 'model', content: smartFallback });
-    return smartFallback;
+    return session;
   }
 
   /**
-   * Context-aware fallback response generator when API rate limits hit
+   * Fallback text user speech processor if WebRTC audio stream fallback occurs
+   */
+  public async processUserSpeech(callId: string, userText: string): Promise<string> {
+    logger.info(`[InfisparkAgent] Call ${callId} user text input: "${userText}"`);
+
+    let history = this.conversationHistories.get(callId);
+    if (!history) {
+      history = [{ role: 'system', content: this.systemPrompt }];
+      this.conversationHistories.set(callId, history);
+    }
+    history.push({ role: 'user', content: userText });
+
+    const liveSession = geminiLiveService.getSession(callId);
+    if (liveSession && liveSession.getIsConnected()) {
+      liveSession.sendTextMessage(userText);
+      return 'Processing request via Gemini Live API...';
+    }
+
+    return this.generateSmartFallback(userText);
+  }
+
+  /**
+   * Context-aware fallback response generator when API rate limits or connection errors occur
    */
   private generateSmartFallback(userText: string): string {
     const lower = userText.toLowerCase();
@@ -140,11 +111,12 @@ CRITICAL CONVERSATIONAL RULES:
   }
 
   /**
-   * Clear session history when call terminates
+   * Clear session history and close Live Session when call terminates
    */
   public clearSession(callId: string): void {
+    geminiLiveService.closeSession(callId);
     this.conversationHistories.delete(callId);
-    logger.debug(`[InfisparkAgent] Cleared conversation history for call ${callId}`);
+    logger.debug(`[InfisparkAgent] Cleared conversation history and closed live session for call ${callId}`);
   }
 }
 

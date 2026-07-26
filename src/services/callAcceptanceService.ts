@@ -78,15 +78,20 @@ export class CallAcceptanceService {
 
       const finalStatus = accepted ? 'CONNECTED' : 'FAILED';
       callSessionManager.updateStatus(callInfo.callId, finalStatus, sdpAnswer);
-      
+
       // Save record to local VPS storage (JSON file)
       localStorageService.saveCallRecord(callInfo, finalStatus, sdpAnswer);
       localStorageService.saveSessions(callSessionManager.getAllSessions());
 
       if (accepted) {
-        logger.info(`[CallAcceptanceService] ✅ Call ${callInfo.callId} CONNECTED. Triggering Infispark AI Agent opening greeting...`);
+        logger.info(`[CallAcceptanceService] ✅ Call ${callInfo.callId} CONNECTED. Initializing Gemini Live Session...`);
 
-        // Trigger Infispark AI Agent greeting & Sarvam TTS speech synthesis over WebRTC
+        // Initialize Gemini Live Real-Time Streaming Session (System prompt sent ONCE)
+        infisparkAgent.initializeLiveSession(callInfo.callId).catch((err) => {
+          logger.warn(`[CallAcceptanceService] Gemini Live session initialization warning for call ${callInfo.callId}:`, { err });
+        });
+
+        // Trigger Infispark AI Agent opening greeting over WebRTC
         this.triggerAiAgentGreeting(callInfo.callId).catch((err) => {
           logger.error(`[CallAcceptanceService] Error generating AI greeting for ${callInfo.callId}:`, { err });
         });
@@ -96,7 +101,7 @@ export class CallAcceptanceService {
           callId: callInfo.callId,
           status: 'CONNECTED',
           sdpAnswer,
-          message: 'Call accepted and Infispark WebRTC AI Voice Agent initialized',
+          message: 'Call accepted and Gemini Live WebRTC Voice Agent initialized',
         };
       } else {
         logger.error(`[CallAcceptanceService] ❌ Failed to accept call ${callInfo.callId} via WhatsApp API`);
