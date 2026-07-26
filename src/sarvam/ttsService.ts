@@ -25,7 +25,7 @@ export class SarvamTtsService {
       const payload = {
         inputs: [text],
         target_language_code: targetLanguageCode,
-        speaker: 'meera',
+        speaker: 'anushka',
         pitch: 0,
         pace: 1.0,
         loudness: 1.5,
