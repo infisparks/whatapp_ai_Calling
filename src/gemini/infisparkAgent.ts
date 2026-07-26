@@ -71,7 +71,7 @@ Your Goals:
             ],
             generationConfig: {
               temperature: 0.7,
-              maxOutputTokens: 150,
+              maxOutputTokens: 300,
             },
           }),
         }
