@@ -3,7 +3,6 @@ import { callSessionManager } from '../whatsapp/callSessionManager';
 import { whatsappClient } from '../whatsapp/whatsappClient';
 import { localStorageService } from '../storage/localStorage';
 import { infisparkAgent } from '../gemini/infisparkAgent';
-import { sarvamTtsService } from '../sarvam/ttsService';
 import { peerConnectionManager } from '../webrtc/peerConnectionManager';
 import { SdpParser } from '../webrtc/sdpParser';
 import { logger } from '../utils/logger';
@@ -13,7 +12,7 @@ import { logger } from '../utils/logger';
  */
 export class CallAcceptanceService {
   /**
-   * Process incoming call offer, parse SDP, register WebRTC PeerConnection, accept call via WhatsApp API, and trigger Infispark AI Agent greeting
+   * Process incoming call offer, parse SDP, register WebRTC PeerConnection, accept call via WhatsApp API, and trigger Infispark AI Agent session
    */
   public async processIncomingCall(callInfo: ParsedCallInfo): Promise<CallAcceptanceResult> {
     logger.info(`==================================================`);
@@ -86,14 +85,14 @@ export class CallAcceptanceService {
       if (accepted) {
         logger.info(`[CallAcceptanceService] ✅ Call ${callInfo.callId} CONNECTED. Initializing Gemini Live Session...`);
 
-        // Initialize Gemini Live Real-Time Streaming Session (System prompt sent ONCE)
-        infisparkAgent.initializeLiveSession(callInfo.callId).catch((err) => {
+        // Initialize Gemini Live Real-Time Streaming Session
+        infisparkAgent.initializeLiveSession(callInfo.callId).then((session) => {
+          session.once('setupComplete', () => {
+            logger.info(`[CallAcceptanceService] Gemini Live session setup completed for call ${callInfo.callId}. Triggering opening greeting...`);
+            session.sendTextMessage(infisparkAgent.getInitialGreeting());
+          });
+        }).catch((err) => {
           logger.warn(`[CallAcceptanceService] Gemini Live session initialization warning for call ${callInfo.callId}:`, { err });
-        });
-
-        // Trigger Infispark AI Agent opening greeting over WebRTC
-        this.triggerAiAgentGreeting(callInfo.callId).catch((err) => {
-          logger.error(`[CallAcceptanceService] Error generating AI greeting for ${callInfo.callId}:`, { err });
         });
 
         return {
@@ -128,22 +127,6 @@ export class CallAcceptanceService {
         message: 'Exception in call acceptance service',
         error: errMessage,
       };
-    }
-  }
-
-  /**
-   * Trigger initial opening greeting from Infispark AI Agent
-   */
-  private async triggerAiAgentGreeting(callId: string): Promise<void> {
-    const greetingText = infisparkAgent.getInitialGreeting();
-    logger.info(`[CallAcceptanceService] Infispark AI Greeting: "${greetingText}"`);
-
-    // Synthesize opening greeting via Sarvam TTS
-    const speechAudioBuffer = await sarvamTtsService.synthesizeSpeech(greetingText, 'en-IN');
-    if (speechAudioBuffer) {
-      // Stream generated audio packets to active call over WebRTC
-      await peerConnectionManager.sendTtsAudioToCall(callId, speechAudioBuffer);
-      logger.info(`[CallAcceptanceService] ✅ Opening AI speech audio packets dispatched to call ${callId}`);
     }
   }
 }

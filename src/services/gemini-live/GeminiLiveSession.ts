@@ -102,9 +102,12 @@ export class GeminiLiveSession extends EventEmitter {
   private sendInitialSetupHandshake(): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
+    const rawModel = geminiLiveConfig.model;
+    const modelName = rawModel.startsWith('models/') ? rawModel : `models/${rawModel}`;
+
     const setupPayload: Record<string, any> = {
       setup: {
-        model: `models/${geminiLiveConfig.model}`,
+        model: modelName,
         generationConfig: {
           responseModalities: geminiLiveConfig.responseModalities,
           speechConfig: {

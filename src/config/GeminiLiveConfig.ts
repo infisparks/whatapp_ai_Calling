@@ -17,7 +17,7 @@ export interface GeminiLiveConfiguration {
 
 export const geminiLiveConfig: GeminiLiveConfiguration = {
   wsUrl: 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent',
-  model: env.GEMINI_MODEL || 'gemini-live-2.5-flash-preview',
+  model: env.GEMINI_MODEL || 'gemini-2.0-flash-exp',
   apiVersion: 'v1alpha',
   responseModalities: ['AUDIO'],
   voiceName: 'Puck', // Options: Puck, Charon, Kore, Fenrir, Aoede

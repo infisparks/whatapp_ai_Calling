@@ -1,8 +1,5 @@
 import { RTCPeerConnection, RTCRtpCodecParameters, RtpHeader, RtpPacket } from 'werift';
 import { logger } from '../utils/logger';
-import { sarvamSttService } from '../sarvam/sttService';
-import { infisparkAgent } from '../gemini/infisparkAgent';
-import { sarvamTtsService } from '../sarvam/ttsService';
 import { AudioProcessor } from '../audio/audioProcessor';
 import { geminiLiveService } from '../services/gemini-live/GeminiLiveService';
 
@@ -12,10 +9,8 @@ interface ActivePeerConnection {
   timestamp: number;
   ssrc: number;
   speechTimeout: NodeJS.Timeout | null;
-  isProcessingSpeech: boolean;
   cancelTtsStream: boolean;
   isStreamingTts: boolean;
-  loudSpeechCountDuringTts: number;
 }
 
 /**
@@ -49,10 +44,8 @@ export class PeerConnectionManager {
       timestamp: 1000,
       ssrc: Math.floor(Math.random() * 0xffffffff),
       speechTimeout: null,
-      isProcessingSpeech: false,
       cancelTtsStream: false,
       isStreamingTts: false,
-      loudSpeechCountDuringTts: 0,
     };
 
     this.connections.set(callId, activeConn);
@@ -62,60 +55,32 @@ export class PeerConnectionManager {
       logger.info(`[PeerConnectionManager] Received incoming WebRTC audio track from call ${callId}`);
 
       const track = event.track;
-      let incomingAudioChunks: Buffer[] = [];
-
-      const dispatchSpeechProcessing = () => {
-        if (incomingAudioChunks.length < 30 || activeConn.isProcessingSpeech) {
-          return;
-        }
-
-        const fullAudioBuffer = Buffer.concat(incomingAudioChunks);
-        incomingAudioChunks = [];
-        activeConn.isProcessingSpeech = true;
-
-        this.processIncomingCallerAudio(callId, fullAudioBuffer).finally(() => {
-          activeConn.isProcessingSpeech = false;
-        });
-      };
 
       track.onReceiveRtp.subscribe((rtp: RtpPacket) => {
         if (rtp.payload && rtp.payload.length > 0) {
           const pcmChunk = AudioProcessor.decodeOpusPacketToPcm(Buffer.from(rtp.payload));
           if (pcmChunk && pcmChunk.length > 0) {
-            // 1. Forward raw audio directly to Gemini Live Audio Bridge if active
+            const volume = AudioProcessor.calculatePcmVolume(pcmChunk);
+
+            // INSTANT BARGE-IN: If AI is speaking and caller starts talking (RMS > 400) -> STOP PLAYBACK IMMEDIATELY
+            if (activeConn.isStreamingTts && volume > 400) {
+              logger.info(`[PeerConnectionManager] [Call ${callId}] 🛑 Caller spoke (RMS ${Math.round(volume)}). Stopping AI playback immediately!`);
+              activeConn.cancelTtsStream = true;
+              activeConn.isStreamingTts = false;
+
+              const bridge = geminiLiveService.getAudioBridge(callId);
+              if (bridge) {
+                bridge.handleInterruption();
+              }
+            }
+
+            // Stream raw audio chunk directly into Gemini Live Audio Bridge
             const bridge = geminiLiveService.getAudioBridge(callId);
             if (bridge) {
               bridge.processCallerAudioChunk(pcmChunk);
             }
-
-            const volume = AudioProcessor.calculatePcmVolume(pcmChunk);
-
-            // Ignore background silence/room noise
-            if (volume > 500) {
-              incomingAudioChunks.push(pcmChunk);
-            }
-
-            // Interrupt check for traditional TTS playback
-            if (activeConn.isStreamingTts && volume > 3500) {
-              activeConn.loudSpeechCountDuringTts++;
-              if (activeConn.loudSpeechCountDuringTts >= 15) {
-                activeConn.cancelTtsStream = true;
-              }
-            }
           }
         }
-
-        // Fallback silence timer for batch processing
-        if (activeConn.speechTimeout) {
-          clearTimeout(activeConn.speechTimeout);
-        }
-
-        activeConn.speechTimeout = setTimeout(() => {
-          const bridge = geminiLiveService.getAudioBridge(callId);
-          if (!bridge) {
-            dispatchSpeechProcessing();
-          }
-        }, 600);
       });
     };
 
@@ -142,7 +107,7 @@ export class PeerConnectionManager {
   }
 
   /**
-   * Stream array of encoded OPUS frames directly to call over WebRTC with real-time pacing & barge-in support
+   * Stream array of encoded OPUS frames directly to call over WebRTC with real-time pacing & instant barge-in cancellation
    */
   public async streamOpusFramesToCall(
     callId: string,
@@ -156,11 +121,12 @@ export class PeerConnectionManager {
     if (!transceiver || !transceiver.sender) return false;
 
     conn.isStreamingTts = true;
+    conn.cancelTtsStream = false;
 
     try {
       for (let i = 0; i < opusFrames.length; i++) {
         if (conn.cancelTtsStream || (isInterruptedFn && isInterruptedFn())) {
-          logger.info(`[PeerConnectionManager] [Call ${callId}] 🛑 Output audio streaming stopped due to interruption`);
+          logger.info(`[PeerConnectionManager] [Call ${callId}] 🛑 WebRTC Opus frame transmission aborted due to barge-in interruption.`);
           break;
         }
 
@@ -204,36 +170,6 @@ export class PeerConnectionManager {
       conn.cancelTtsStream = true;
       conn.isStreamingTts = false;
       logger.info(`[PeerConnectionManager] Cancelled active playback for call ${callId}`);
-    }
-  }
-
-  /**
-   * Stream TTS audio buffer to caller over WebRTC PeerConnection
-   */
-  public async sendTtsAudioToCall(callId: string, wavBuffer: Buffer): Promise<boolean> {
-    const opusFrames = AudioProcessor.encodeWavToOpusFrames(wavBuffer);
-    return this.streamOpusFramesToCall(callId, opusFrames);
-  }
-
-  /**
-   * Process caller speech chunk fallback -> Sarvam STT -> Gemini Agent -> Sarvam TTS -> Stream Audio
-   */
-  private async processIncomingCallerAudio(callId: string, audioBuffer: Buffer): Promise<void> {
-    logger.info(`[PeerConnectionManager] Transcribing caller speech buffer (${audioBuffer.length} bytes)...`);
-
-    const transcript = await sarvamSttService.transcribeAudio(audioBuffer, 'en-IN');
-    if (!transcript || transcript.trim().length === 0) {
-      logger.debug('[PeerConnectionManager] No clear speech detected in audio chunk');
-      return;
-    }
-
-    logger.info(`[PeerConnectionManager] Caller said: "${transcript}"`);
-    const aiResponseText = await infisparkAgent.processUserSpeech(callId, transcript);
-    logger.info(`[PeerConnectionManager] Maya AI Response: "${aiResponseText}"`);
-
-    const replyAudioBuffer = await sarvamTtsService.synthesizeSpeech(aiResponseText, 'en-IN');
-    if (replyAudioBuffer) {
-      await this.sendTtsAudioToCall(callId, replyAudioBuffer);
     }
   }
 
