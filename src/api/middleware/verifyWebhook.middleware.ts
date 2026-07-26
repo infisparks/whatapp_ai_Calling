@@ -10,7 +10,7 @@ import { logger } from '../../utils/logger';
 /**
  * GET Verification Middleware (hub.verify_token check)
  */
-export const verifyWebhookToken = (req: Request, res: Response, next: NextFunction): void => {
+export const verifyWebhookToken = (req: Request, res: Response, _next: NextFunction): void => {
   const mode = req.query['hub.mode'] as string | undefined;
   const token = req.query['hub.verify_token'] as string | undefined;
   const challenge = req.query['hub.challenge'] as string | undefined;

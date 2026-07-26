@@ -90,6 +90,7 @@ export class WhatsAppClient {
       });
 
       const responseData = await response.json();
+      logger.info(`[WhatsAppClient] Call ${callId} termination response:`, responseData);
       return response.ok;
     } catch (error) {
       logger.error(`[WhatsAppClient] Exception terminating call ${callId}:`, { error });

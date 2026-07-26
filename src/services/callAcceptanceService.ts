@@ -33,7 +33,7 @@ export class CallAcceptanceService {
       }
 
       // 2. Register Call Session in session manager
-      const session = callSessionManager.registerCall(callInfo, parsedSdp);
+      callSessionManager.registerCall(callInfo, parsedSdp);
 
       // 3. Check call event type
       if (callInfo.eventType === 'terminate' || callInfo.eventType === 'rejected') {

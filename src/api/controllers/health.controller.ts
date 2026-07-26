@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { env } from '../../config/env.config';
 
 export class HealthController {
-  public getHealth(req: Request, res: Response): void {
+  public getHealth(_req: Request, res: Response): void {
     const memoryUsage = process.memoryUsage();
     
     res.status(200).json({

@@ -61,7 +61,7 @@ export class WhatsAppController {
    * GET /api/v1/whatsapp/sessions
    * Diagnostic endpoint to view active in-memory call sessions
    */
-  public getActiveSessions(req: Request, res: Response): void {
+  public getActiveSessions(_req: Request, res: Response): void {
     const sessions = callSessionManager.getAllSessions();
     res.status(200).json({
       success: true,
