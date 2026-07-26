@@ -2,6 +2,7 @@ import { CallAcceptanceResult, ParsedCallInfo } from '../types/whatsapp.types';
 import { SdpParser } from '../webrtc/sdpParser';
 import { callSessionManager } from '../whatsapp/callSessionManager';
 import { whatsappClient } from '../whatsapp/whatsappClient';
+import { localStorageService } from '../storage/localStorage';
 import { logger } from '../utils/logger';
 
 /**
@@ -9,7 +10,7 @@ import { logger } from '../utils/logger';
  */
 export class CallAcceptanceService {
   /**
-   * Process incoming call offer, log details, parse SDP, register session, and accept call
+   * Process incoming call offer, log details, parse SDP, register session, save to VPS local storage, and accept call
    */
   public async processIncomingCall(callInfo: ParsedCallInfo): Promise<CallAcceptanceResult> {
     logger.info(`==================================================`);
@@ -38,6 +39,9 @@ export class CallAcceptanceService {
       if (callInfo.eventType === 'terminate' || callInfo.eventType === 'rejected') {
         logger.info(`[CallAcceptanceService] Call ${callInfo.callId} ended by remote user (${callInfo.eventType})`);
         callSessionManager.removeSession(callInfo.callId);
+        localStorageService.saveCallRecord(callInfo, callInfo.eventType.toUpperCase());
+        localStorageService.saveSessions(callSessionManager.getAllSessions());
+
         return {
           success: true,
           callId: callInfo.callId,
@@ -61,19 +65,24 @@ export class CallAcceptanceService {
         callInfo.businessPhoneNumberId
       );
 
+      const finalStatus = accepted ? 'CONNECTED' : 'FAILED';
+      callSessionManager.updateStatus(callInfo.callId, finalStatus, sdpAnswer);
+      
+      // Save record to local VPS storage (JSON file)
+      localStorageService.saveCallRecord(callInfo, finalStatus, sdpAnswer);
+      localStorageService.saveSessions(callSessionManager.getAllSessions());
+
       if (accepted) {
-        callSessionManager.updateStatus(callInfo.callId, 'CONNECTED', sdpAnswer);
-        logger.info(`[CallAcceptanceService] ✅ Successfully accepted call ${callInfo.callId}`);
+        logger.info(`[CallAcceptanceService] ✅ Successfully accepted call ${callInfo.callId} and saved to VPS local storage`);
 
         return {
           success: true,
           callId: callInfo.callId,
           status: 'CONNECTED',
           sdpAnswer,
-          message: 'Call accepted successfully',
+          message: 'Call accepted successfully and logged to local storage',
         };
       } else {
-        callSessionManager.updateStatus(callInfo.callId, 'FAILED');
         logger.error(`[CallAcceptanceService] ❌ Failed to accept call ${callInfo.callId} via WhatsApp API`);
 
         return {
@@ -88,6 +97,8 @@ export class CallAcceptanceService {
       logger.error(`[CallAcceptanceService] Error processing incoming call ${callInfo.callId}:`, { error });
 
       callSessionManager.updateStatus(callInfo.callId, 'FAILED');
+      localStorageService.saveCallRecord(callInfo, 'FAILED');
+      localStorageService.saveSessions(callSessionManager.getAllSessions());
 
       return {
         success: false,
