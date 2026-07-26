@@ -10,6 +10,8 @@ interface ActivePeerConnection {
   sequenceNumber: number;
   timestamp: number;
   ssrc: number;
+  speechTimeout: NodeJS.Timeout | null;
+  isProcessingSpeech: boolean;
 }
 
 /**
@@ -42,6 +44,8 @@ export class PeerConnectionManager {
       sequenceNumber: 100,
       timestamp: 1000,
       ssrc: Math.floor(Math.random() * 0xffffffff),
+      speechTimeout: null,
+      isProcessingSpeech: false,
     };
 
     this.connections.set(callId, activeConn);
@@ -53,19 +57,40 @@ export class PeerConnectionManager {
       const track = event.track;
       let incomingAudioChunks: Buffer[] = [];
 
+      const dispatchSpeechProcessing = () => {
+        if (incomingAudioChunks.length < 50 || activeConn.isProcessingSpeech) {
+          return;
+        }
+
+        const fullAudioBuffer = Buffer.concat(incomingAudioChunks);
+        incomingAudioChunks = [];
+        activeConn.isProcessingSpeech = true;
+
+        this.processIncomingCallerAudio(callId, fullAudioBuffer)
+          .finally(() => {
+            activeConn.isProcessingSpeech = false;
+          });
+      };
+
       track.onReceiveRtp.subscribe((rtp: RtpPacket) => {
         if (rtp.payload && rtp.payload.length > 0) {
           incomingAudioChunks.push(Buffer.from(rtp.payload));
         }
 
-        // Process audio chunk every ~3 seconds of caller speech (600 RTP packets)
-        if (incomingAudioChunks.length >= 600) {
-          const fullAudioBuffer = Buffer.concat(incomingAudioChunks);
-          incomingAudioChunks = [];
+        // Reset silence timer on every new audio packet
+        if (activeConn.speechTimeout) {
+          clearTimeout(activeConn.speechTimeout);
+        }
 
-          this.processIncomingCallerAudio(callId, fullAudioBuffer).catch((err) => {
-            logger.error(`[PeerConnectionManager] Error processing caller audio for ${callId}:`, { err });
-          });
+        // If caller pauses speaking for 800ms, process the spoken sentence
+        activeConn.speechTimeout = setTimeout(() => {
+          dispatchSpeechProcessing();
+        }, 800);
+
+        // Or process immediately if buffer reaches 250 packets (~4 seconds)
+        if (incomingAudioChunks.length >= 250) {
+          if (activeConn.speechTimeout) clearTimeout(activeConn.speechTimeout);
+          dispatchSpeechProcessing();
         }
       });
     };
@@ -178,6 +203,9 @@ export class PeerConnectionManager {
   public closeConnection(callId: string): void {
     const conn = this.connections.get(callId);
     if (conn) {
+      if (conn.speechTimeout) {
+        clearTimeout(conn.speechTimeout);
+      }
       try {
         conn.pc.close();
       } catch (e) {
