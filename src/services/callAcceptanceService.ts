@@ -1,11 +1,11 @@
 import { CallAcceptanceResult, ParsedCallInfo } from '../types/whatsapp.types';
-import { SdpParser } from '../webrtc/sdpParser';
 import { callSessionManager } from '../whatsapp/callSessionManager';
 import { whatsappClient } from '../whatsapp/whatsappClient';
 import { localStorageService } from '../storage/localStorage';
 import { infisparkAgent } from '../gemini/infisparkAgent';
 import { sarvamTtsService } from '../sarvam/ttsService';
-import { audioStreamer } from '../webrtc/audioStreamer';
+import { peerConnectionManager } from '../webrtc/peerConnectionManager';
+import { SdpParser } from '../webrtc/sdpParser';
 import { logger } from '../utils/logger';
 
 /**
@@ -13,7 +13,7 @@ import { logger } from '../utils/logger';
  */
 export class CallAcceptanceService {
   /**
-   * Process incoming call offer, log details, parse SDP, register session, save to VPS local storage, accept call, and trigger Infispark AI Agent greeting
+   * Process incoming call offer, parse SDP, register WebRTC PeerConnection, accept call via WhatsApp API, and trigger Infispark AI Agent greeting
    */
   public async processIncomingCall(callInfo: ParsedCallInfo): Promise<CallAcceptanceResult> {
     logger.info(`==================================================`);
@@ -31,8 +31,6 @@ export class CallAcceptanceService {
       if (callInfo.sdpOffer) {
         logger.info(`[CallAcceptanceService] Parsing SDP Offer for Call ID ${callInfo.callId}`);
         parsedSdp = SdpParser.parse(callInfo.sdpOffer);
-      } else {
-        logger.warn(`[CallAcceptanceService] No SDP Offer string present in call event for Call ID ${callInfo.callId}`);
       }
 
       // 2. Register Call Session in session manager
@@ -43,6 +41,7 @@ export class CallAcceptanceService {
         logger.info(`[CallAcceptanceService] Call ${callInfo.callId} ended by remote user (${callInfo.eventType})`);
         callSessionManager.removeSession(callInfo.callId);
         infisparkAgent.clearSession(callInfo.callId);
+        peerConnectionManager.closeConnection(callInfo.callId);
         localStorageService.saveCallRecord(callInfo, callInfo.eventType.toUpperCase());
         localStorageService.saveSessions(callSessionManager.getAllSessions());
 
@@ -57,10 +56,18 @@ export class CallAcceptanceService {
       // 4. Update status to ACCEPTING
       callSessionManager.updateStatus(callInfo.callId, 'ACCEPTING');
 
-      // 5. Generate SDP Answer matching Meta WebRTC specification
-      const sdpAnswer = parsedSdp 
-        ? SdpParser.generateBoilerplateAnswer(parsedSdp)
-        : 'v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9000 UDP/TLS/RTP/SAVPF 111\r\n';
+      // 5. Generate Real WebRTC SDP Answer using werift PeerConnection Engine
+      let sdpAnswer: string;
+      if (callInfo.sdpOffer) {
+        try {
+          sdpAnswer = await peerConnectionManager.handleCallOffer(callInfo.callId, callInfo.sdpOffer);
+        } catch (webrtcErr) {
+          logger.error(`[CallAcceptanceService] werift PeerConnection setup failed, using boilerplate fallback:`, { webrtcErr });
+          sdpAnswer = SdpParser.generateBoilerplateAnswer(parsedSdp || SdpParser.parse(callInfo.sdpOffer));
+        }
+      } else {
+        sdpAnswer = 'v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\nm=audio 9000 UDP/TLS/RTP/SAVPF 111\r\n';
+      }
 
       // 6. Send Call Acceptance signal to WhatsApp API
       const accepted = await whatsappClient.acceptCall(
@@ -79,7 +86,7 @@ export class CallAcceptanceService {
       if (accepted) {
         logger.info(`[CallAcceptanceService] ✅ Call ${callInfo.callId} CONNECTED. Triggering Infispark AI Agent opening greeting...`);
 
-        // Trigger Infispark AI Agent greeting & Sarvam TTS speech synthesis
+        // Trigger Infispark AI Agent greeting & Sarvam TTS speech synthesis over WebRTC
         this.triggerAiAgentGreeting(callInfo.callId).catch((err) => {
           logger.error(`[CallAcceptanceService] Error generating AI greeting for ${callInfo.callId}:`, { err });
         });
@@ -89,7 +96,7 @@ export class CallAcceptanceService {
           callId: callInfo.callId,
           status: 'CONNECTED',
           sdpAnswer,
-          message: 'Call accepted and Infispark AI Voice Agent initialized',
+          message: 'Call accepted and Infispark WebRTC AI Voice Agent initialized',
         };
       } else {
         logger.error(`[CallAcceptanceService] ❌ Failed to accept call ${callInfo.callId} via WhatsApp API`);
@@ -129,9 +136,9 @@ export class CallAcceptanceService {
     // Synthesize opening greeting via Sarvam TTS
     const speechAudioBuffer = await sarvamTtsService.synthesizeSpeech(greetingText, 'en-IN');
     if (speechAudioBuffer) {
-      // Stream generated audio to active call
-      await audioStreamer.streamAudioToCall(callId, speechAudioBuffer);
-      logger.info(`[CallAcceptanceService] ✅ Opening AI speech audio dispatched to call ${callId}`);
+      // Stream generated audio packets to active call over WebRTC
+      await peerConnectionManager.sendTtsAudioToCall(callId, speechAudioBuffer);
+      logger.info(`[CallAcceptanceService] ✅ Opening AI speech audio packets dispatched to call ${callId}`);
     }
   }
 }
