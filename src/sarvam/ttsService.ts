@@ -29,7 +29,7 @@ export class SarvamTtsService {
         pitch: 0,
         pace: 1.0,
         loudness: 1.5,
-        speech_sample_rate: 8000,
+        speech_sample_rate: 16000,
         enable_preprocessing: true,
         model: 'bulbul:v2',
       };
