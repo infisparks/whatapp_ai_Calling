@@ -50,7 +50,13 @@ CRITICAL CONVERSATIONAL RULES:
       return this.generateSmartFallback(userText);
     }
 
-    const modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-flash'];
+    const modelsToTry = [
+      'gemini-2.0-flash-lite',
+      'gemini-1.5-flash-8b',
+      'gemini-2.0-flash',
+      'gemini-1.5-flash',
+      'gemini-2.5-flash',
+    ];
 
     const userModelTurns = history.filter((m) => m.role === 'user' || m.role === 'model');
     const dialogueHistoryText = userModelTurns
@@ -116,19 +122,27 @@ CRITICAL CONVERSATIONAL RULES:
   private generateSmartFallback(userText: string): string {
     const lower = userText.toLowerCase();
 
+    if (lower.includes('team') || lower.includes('member') || lower.includes('many') || lower.includes('people')) {
+      return 'Infispark has a team of senior AI engineers, web developers, and cloud architects. How many team members do you need for your project?';
+    }
+
     if (lower.includes('stop') || lower.includes('chup') || lower.includes('listen') || lower.includes('hear')) {
       return 'I am sorry! I am listening now. Please tell me how I can help you.';
     }
 
-    if (lower.includes('do') || lower.includes('work') || lower.includes('job') || lower.includes('kaam')) {
-      return 'Infispark develops custom AI voice agents, web applications, and cloud software for businesses. How can our team assist you?';
+    if (lower.includes('do') || lower.includes('work') || lower.includes('job') || lower.includes('kaam') || lower.includes('park')) {
+      return 'Infispark develops custom AI voice agents, web applications, and cloud software for businesses. Would you like to schedule a free consultation with our tech team?';
     }
 
-    if (lower.includes('price') || lower.includes('cost') || lower.includes('rate')) {
+    if (lower.includes('price') || lower.includes('cost') || lower.includes('rate') || lower.includes('charge')) {
       return 'We offer custom packages based on your project requirements. Would you like to schedule a consultation with our technical team?';
     }
 
-    return 'I hear you. Infispark specializes in custom AI and web development. How can we help your business today?';
+    if (lower.includes('hello') || lower.includes('hi') || lower.includes('hey')) {
+      return 'Hello! Thank you for calling Infispark. How can our team assist you with your project today?';
+    }
+
+    return 'Infispark specializes in custom AI voice call agents and web application development. How can we help your business today?';
   }
 
   /**

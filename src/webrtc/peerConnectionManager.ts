@@ -89,10 +89,10 @@ export class PeerConnectionManager {
               incomingAudioChunks.push(pcmChunk);
             }
 
-            // Only trigger interruption if Maya is CURRENTLY streaming audio AND caller speaks loudly (RMS > 2500)
-            if (activeConn.isStreamingTts && volume > 2500) {
+            // Only trigger interruption if Maya is CURRENTLY streaming audio AND caller speaks loudly (RMS > 3500)
+            if (activeConn.isStreamingTts && volume > 3500) {
               activeConn.loudSpeechCountDuringTts++;
-              if (activeConn.loudSpeechCountDuringTts >= 8) {
+              if (activeConn.loudSpeechCountDuringTts >= 15) {
                 activeConn.cancelTtsStream = true;
               }
             }
