@@ -58,8 +58,8 @@ export class PeerConnectionManager {
           incomingAudioChunks.push(Buffer.from(rtp.payload));
         }
 
-        // Process audio chunk every ~3 seconds of caller speech
-        if (incomingAudioChunks.length >= 150) {
+        // Process audio chunk every ~3 seconds of caller speech (600 RTP packets)
+        if (incomingAudioChunks.length >= 600) {
           const fullAudioBuffer = Buffer.concat(incomingAudioChunks);
           incomingAudioChunks = [];
 
