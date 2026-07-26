@@ -57,4 +57,18 @@ export class AudioProcessor {
       return null;
     }
   }
+
+  /**
+   * Calculate volume RMS energy level of 16-bit linear PCM audio chunk
+   */
+  public static calculatePcmVolume(pcmBuffer: Buffer): number {
+    if (!pcmBuffer || pcmBuffer.length < 2) return 0;
+    let sumSq = 0;
+    const sampleCount = Math.floor(pcmBuffer.length / 2);
+    for (let i = 0; i < pcmBuffer.length - 1; i += 2) {
+      const sample = pcmBuffer.readInt16LE(i);
+      sumSq += sample * sample;
+    }
+    return Math.sqrt(sumSq / sampleCount);
+  }
 }

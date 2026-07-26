@@ -78,12 +78,17 @@ export class PeerConnectionManager {
         if (rtp.payload && rtp.payload.length > 0) {
           const pcmChunk = AudioProcessor.decodeOpusPacketToPcm(Buffer.from(rtp.payload));
           if (pcmChunk && pcmChunk.length > 0) {
-            incomingAudioChunks.push(pcmChunk);
-          }
+            const volume = AudioProcessor.calculatePcmVolume(pcmChunk);
 
-          // Only interrupt Maya if caller has actually spoken real voice (>15 speech packets)
-          if (incomingAudioChunks.length >= 15) {
-            activeConn.cancelTtsStream = true;
+            // Ignore background silence/room noise (only buffer real speech energy RMS > 500)
+            if (volume > 500) {
+              incomingAudioChunks.push(pcmChunk);
+
+              // Only interrupt Maya if caller speaks with strong voice energy (RMS > 2000)
+              if (volume > 2000 && incomingAudioChunks.length >= 10) {
+                activeConn.cancelTtsStream = true;
+              }
+            }
           }
         }
 
